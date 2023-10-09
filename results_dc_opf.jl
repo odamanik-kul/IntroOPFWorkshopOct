@@ -1,5 +1,3 @@
-
-
 # Get results
 baseMVA = m_dc_opf.ext[:parameters][:baseMVA]
 # Sets
@@ -26,7 +24,7 @@ plot_size = (720,480)
 plot_legend = false #:topright # :bottomright
 plot_legend_column = 2
 gen_p_all_mw = [gen_p[g,1] for g in set_G].*baseMVA
-plot_gen_p = bar(genstoc_p_all_mw,
+plot_gen_p = bar(gen_p_all_mw,
                     framestyle = :box,
                     legend= plot_legend,
                     # palette=cgrad(:default, length(gen_ids), categorical = true),
