@@ -4,6 +4,7 @@ using Ipopt
 using DataFrames
 using XLSX
 using CPLEX
+using Plots
 const PM = PowerModels
 
 # Setup file
