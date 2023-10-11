@@ -41,7 +41,10 @@ function build_dc_opf!(m::Model)
 
     # Generators
     gen_bus = m.ext[:parameters][:gen][:bus]
-    gen_cost_lin = m.ext[:parameters][:gen][:cost_linear]
+    gen_ncost = m.ext[:parameters][:gen][:ncost]
+    # Maximum ncost - To determine the cost function order
+    max_gen_ncost = m.ext[:parameters][:gen][:max_ncost]
+    gen_cost = m.ext[:parameters][:gen][:cost]
     gen_p_max = m.ext[:parameters][:gen][:p_max]
     gen_p_min = m.ext[:parameters][:gen][:p_min]
     gen_q_max = m.ext[:parameters][:gen][:q_max]
@@ -66,18 +69,35 @@ function build_dc_opf!(m::Model)
     # AC branch power flows
     p_b_ac = m.ext[:variables][:p_b_ac] = @variable(m, [arcs,T], base_name="p_b_ac")
     
-    ##### OBJECTIVE FUNCTION
-    m.ext[:objective] = @objective(m, Min,
-            sum(sum(gen_cost_lin[g]*gen_p[g,t]
-                    for g in G) for t in T)
-    )
+    ##### OBJECTIVE
+    if max_gen_ncost == 1
+        m.ext[:objective] = @objective(m, Min,
+                sum(sum(gen_cost[g][1]
+                        for g in G) for t in T)
+        )
+    elseif max_gen_ncost == 2
+        m.ext[:objective] = @objective(m, Min,
+                sum(sum(gen_cost[g][1]*gen_p[g,t] + gen_cost[g][2]
+                        for g in G) for t in T)
+        )
+    elseif max_gen_ncost == 3
+        m.ext[:objective] = @objective(m, Min,
+                sum(sum(gen_cost[g][1]*gen_p[g,t]^2 + gen_cost[g][2]*gen_p[g,t] + gen_cost[g][3]
+                        for g in G) for t in T)
+        )
+    elseif max_gen_ncost == 4
+        m.ext[:objective] = @objective(m, Min,
+                sum(sum(gen_cost[g][1]*gen_p[g,t]^3 + gen_cost[g][2]*gen_p[g,t]^2 + gen_cost[g][3]*gen_p[g,t] + + gen_cost[g][4]
+                        for g in G) for t in T)
+        )
+    end
 
     ##### CONSTRAINTS
     m.ext[:constraints] = Dict()
     # Generator - Maximum and minimum active power limits
-    m.ext[:constraints][:gen_p_max_ub] = @constraint(m, [g=G, t=T],
-        gen_p_min[g] <= gen_p[g,t])
     m.ext[:constraints][:gen_p_max_lb] = @constraint(m, [g=G, t=T],
+        gen_p_min[g] <= gen_p[g,t])
+    m.ext[:constraints][:gen_p_max_ub] = @constraint(m, [g=G, t=T],
         gen_p[g,t] <= gen_p_max[g])
 
     # Active branch power flow limits

@@ -1,5 +1,6 @@
-function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_file::String)
+function init_model!(m::Model, case_data::Dict,time_steps::Int,is_time_series_file::Bool,load_time_series_file = nothing)
 
+    grid_data = deepcopy(case_data)
     ##### SETS
     m.ext[:sets] = Dict()
     ##### TIME STEPS
@@ -8,6 +9,7 @@ function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_
     # Buses
     M = m.ext[:sets][:bus] = [bus_id for (bus_id,bus) in grid_data["bus"]]
     MSL = m.ext[:sets][:bus_slack] = [bus_id for (bus_id,bus) in grid_data["bus"] if bus["bus_type"] == 3] # set of slack buses
+    MPV = m.ext[:sets][:bus_pv] = [bus_id for (bus_id,bus) in grid_data["bus"] if bus["bus_type"] == 2] # set of PV buses
     # Generators
     G = m.ext[:sets][:gen] = [gen_id for (gen_id,gen) in grid_data["gen"]]
     # Branch
@@ -48,6 +50,7 @@ function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_
     m.ext[:parameters][:bus][:vm_max] = Dict(bus_id => bus["vmax"] for (bus_id,bus) in grid_data["bus"])
     m.ext[:parameters][:bus][:va_min] = Dict(bus_id => -pi for (bus_id,bus) in grid_data["bus"])
     m.ext[:parameters][:bus][:va_max] = Dict(bus_id => pi for (bus_id,bus) in grid_data["bus"])
+    m.ext[:parameters][:bus][:vm_set] = Dict(bus_id => bus["vm"] for (bus_id,bus) in grid_data["bus"])
 
     # Branches
     m.ext[:parameters][:branch] = Dict()
@@ -63,6 +66,7 @@ function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_
     m.ext[:parameters][:branch][:b_sh_to] = Dict(br_id => br["b_to"] for (br_id,br) in grid_data["branch"])
     m.ext[:parameters][:branch][:ang_min] = Dict(br_id => br["angmin"] for (br_id,br) in grid_data["branch"])
     m.ext[:parameters][:branch][:ang_max] = Dict(br_id => br["angmax"] for (br_id,br) in grid_data["branch"])
+    m.ext[:parameters][:branch][:tap_ratio] = Dict(br_id => br["tap"] for (br_id,br) in grid_data["branch"])
 
     m.ext[:parameters][:bus][:ij_ang_max] = Dict()
     m.ext[:parameters][:bus][:ij_ang_min] = Dict()
@@ -84,14 +88,15 @@ function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_
     # Generators
     m.ext[:parameters][:gen] = Dict()
     m.ext[:parameters][:gen][:bus] =  Dict(gen_id => string(gen["gen_bus"]) for (gen_id,gen) in grid_data["gen"])
-    m.ext[:parameters][:gen][:cost_linear] = Dict()
-    for (gen_id,gen) in grid_data["gen"]
-        if isempty(gen["cost"])
-            m.ext[:parameters][:gen][:cost_linear][gen_id] = 0
-        else
-            m.ext[:parameters][:gen][:cost_linear][gen_id] = gen["cost"][gen["ncost"]-1]
+    max_gen_ncost = m.ext[:parameters][:gen][:max_ncost] = maximum([gen["ncost"] for (gen_id,gen) in grid_data["gen"]])
+    m.ext[:parameters][:gen][:ncost] = Dict(gen_id => gen["ncost"] for (gen_id,gen) in grid_data["gen"])
+    m.ext[:parameters][:gen][:cost] = Dict(gen_id => gen["cost"] for (gen_id,gen) in grid_data["gen"])
+    # Uniform the length of the cost vector throughout all generators
+    for (gen_id,gen_cost) in m.ext[:parameters][:gen][:cost]
+        while (length(m.ext[:parameters][:gen][:cost][gen_id]) < max_gen_ncost)
+            prepend!(m.ext[:parameters][:gen][:cost][gen_id],0)
         end
-    end
+    end            
     m.ext[:parameters][:gen][:p_max] = Dict(gen_id => gen["pmax"] for (gen_id,gen) in grid_data["gen"])
     m.ext[:parameters][:gen][:p_min] = Dict(gen_id => gen["pmin"] for (gen_id,gen) in grid_data["gen"])
     m.ext[:parameters][:gen][:q_max] = Dict(gen_id => gen["qmax"] for (gen_id,gen) in grid_data["gen"])
@@ -100,8 +105,8 @@ function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_
     # Loads
     m.ext[:parameters][:load] = Dict()
     m.ext[:parameters][:load][:bus] = Dict(load_id => string(load["load_bus"]) for (load_id,load) in grid_data["load"])
-    m.ext[:parameters][:load][:p_d] = Dict(load_id => load["pd"] for (load_id,load) in grid_data["load"])
-    m.ext[:parameters][:load][:q_d] = Dict(load_id => load["qd"] for (load_id,load) in grid_data["load"])
+    pd = m.ext[:parameters][:load][:p_d] = Dict(load_id => load["pd"] for (load_id,load) in grid_data["load"])
+    qd = m.ext[:parameters][:load][:q_d] = Dict(load_id => load["qd"] for (load_id,load) in grid_data["load"])
     m.ext[:parameters][:load][:cost_curt] = Dict(load_id => 100000 for (load_id,load) in grid_data["load"])
     bus_load = m.ext[:parameters][:bus_load]= Dict(m_ => [] for m_ in m.ext[:sets][:bus])
     for (m_,load_) in bus_load
@@ -118,13 +123,18 @@ function init_model!(m::Model, grid_data::Dict,time_steps::Int,load_time_series_
     ##### TIME SERIES
     m.ext[:time_series] = Dict()
     # Loads
-    load_pd_time_series_df = DataFrame(XLSX.readtable(load_time_series_file,"pd"))
-    load_pd_time_series_dict_init = Dict(pairs(eachcol(load_pd_time_series_df)))
-    load_qd_time_series_df = DataFrame(XLSX.readtable(load_time_series_file,"qd"))
-    load_qd_time_series_dict_init = Dict(pairs(eachcol(load_qd_time_series_df)))
     m.ext[:time_series][:load] = Dict()
-    m.ext[:time_series][:load][:p] = Dict(string(df_id) => df for (df_id,df) in load_pd_time_series_dict_init)
-    m.ext[:time_series][:load][:q] = Dict(string(df_id) => df for (df_id,df) in load_qd_time_series_dict_init)
+    if is_time_series_file
+        load_pd_time_series_df = DataFrame(XLSX.readtable(load_time_series_file,"pd"))
+        load_pd_time_series_dict_init = Dict(pairs(eachcol(load_pd_time_series_df)))
+        load_qd_time_series_df = DataFrame(XLSX.readtable(load_time_series_file,"qd"))
+        load_qd_time_series_dict_init = Dict(pairs(eachcol(load_qd_time_series_df)))
+        m.ext[:time_series][:load][:p] = Dict(string(df_id) => df for (df_id,df) in load_pd_time_series_dict_init)
+        m.ext[:time_series][:load][:q] = Dict(string(df_id) => df for (df_id,df) in load_qd_time_series_dict_init)
+    else
+        m.ext[:time_series][:load][:p] = pd
+        m.ext[:time_series][:load][:q] = qd
+    end
 
     return m
 end
